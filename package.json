@@ -11,7 +11,7 @@
   "dependencies": {
     "@headlessui/react": "^1.7.17",
     "@heroicons/react": "^2.0.18",
-    "@nhost/nextjs": "^2.1.0",
+    "@nhost/nextjs": "^2.2.8",
     "@nhost/react": "^3.0.1",
     "@react-spring/web": "^9.5.5",
     "clsx": "^2.0.0",
