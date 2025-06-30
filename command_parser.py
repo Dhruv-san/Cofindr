@@ -10,8 +10,18 @@ class CommandParser:
         self.command_patterns = [
             # Pattern for "go to <URL>" or "open <URL>"
             (re.compile(r"^(?:go\s+to|open)\s+(?P<url>\S+\.\S+.*)$", re.IGNORECASE), "goto"),
-            # Pattern for "search for <QUERY>" or "search <QUERY>"
-            (re.compile(r"^search(?:\s+for)?\s+(?P<query>.+)$", re.IGNORECASE), "search"),
+            # Pattern for "search for <QUERY>" or "search <QUERY>" (web search)
+            (re.compile(r"^(?:web\s+)?search(?:\s+for)?\s+(?P<query>.+)$", re.IGNORECASE), "web_search"),
+            # Pattern for "find file <PATTERN> (in <PATH>)"
+            (re.compile(r"^find\s+file\s+(?P<pattern>\S+)(?:\s+in\s+(?P<path>.+))?$", re.IGNORECASE), "find_file"),
+            # Pattern for "read file <FILEPATH>" or "read book <FILEPATH>"
+            (re.compile(r"^(?:read\s+file|read\s+book)\s+(?P<filepath>.+)$", re.IGNORECASE), "read_file"),
+            # Pattern for "make notes from <FILEPATH> (to <OUTPUT_FILEPATH>) (titled <TITLE>)"
+            # All parts after "from" are optional for now, but "from" is key.
+            (re.compile(
+                r"^make\s+notes\s+from\s+(?P<source_filepath>.+?)"
+                r"(?:\s+to\s+(?P<output_filepath>.+?))?"
+                r"(?:\s+titled\s+(?P<title>.+))?$", re.IGNORECASE), "make_notes"),
         ]
 
     def parse_command(self, command_text: str) -> dict | None:
@@ -32,10 +42,33 @@ class CommandParser:
                     # For now, just ensure it's not empty
                     if url:
                         return {"action": "goto", "url": url}
-                elif action_type == "search":
+                elif action_type == "web_search":
                     query = match.group("query")
                     if query: # Ensure query is not empty
-                        return {"action": "search", "query": query}
+                        return {"action": "web_search", "query": query}
+                elif action_type == "find_file":
+                    pattern = match.group("pattern")
+                    path = match.group("path") # This can be None if not provided
+                    if pattern:
+                        return {"action": "find_file", "pattern": pattern, "path": path.strip() if path else None}
+                elif action_type == "read_file":
+                    filepath = match.group("filepath")
+                    if filepath:
+                        # Remove potential quotes around filepath if user adds them
+                        filepath = filepath.strip().strip('\'"')
+                        return {"action": "read_file", "filepath": filepath}
+                elif action_type == "make_notes":
+                    source_filepath = match.group("source_filepath").strip().strip('\'"')
+                    output_filepath = match.group("output_filepath")
+                    title = match.group("title")
+
+                    if source_filepath:
+                        return {
+                            "action": "make_notes",
+                            "source_filepath": source_filepath,
+                            "output_filepath": output_filepath.strip().strip('\'"') if output_filepath else None,
+                            "title": title.strip().strip('\'"') if title else None
+                        }
 
         print(f"Command not recognized: {command_text}")
         return None
@@ -47,15 +80,28 @@ if __name__ == "__main__":
     commands_to_test = [
         "go to example.com",
         "open google.com",
-        "search for latest python news",
-        "search how to learn playwright",
+        "web search for latest python news",
+        "search how to learn playwright", # Should still work as web_search due to regex
         "go to https://playwright.dev",
         "open my_website.co.uk/path",
-        "search for cats and dogs",
+        "web search for cats and dogs",
+        "find file *.txt",
+        "find file report.docx in C:\\Users\\Me\\Documents",
+        "find file image.png in /tmp/my_stuff",
+        "read file C:\\My Documents\\notes.txt",
+        "read book /path/to/my/book.txt",
+        "read file \"D:\\Folder With Spaces\\file.txt\"",
+        "make notes from my_document.txt",
+        "make notes from \"another document.txt\" to my_notes.md",
+        "make notes from important_lecture.txt titled \"Lecture Highlights\"",
+        "make notes from research_paper.pdf to research_summary.txt titled \"Paper Summary\"",
         "random command that should not match",
-        "open", # Should not match
-        "search", # Should not match
-        "go to ", # Should not match
+        "open",
+        "search", # This alone won't match web_search without a query
+        "find file", # Incomplete
+        "read file", # Incomplete
+        "go to ",
+        "make notes from", # Incomplete
     ]
 
     for cmd in commands_to_test:
