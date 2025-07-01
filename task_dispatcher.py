@@ -98,8 +98,31 @@ class TaskDispatcher:
                 # For testing, let's default to current dir to avoid writing to user's actual home/docs
                 # during component tests.
                 # In main_agent.py, a better default path strategy would be used.
-                output_filepath = "agent_generated_notes.md"
-                print(f"Dispatcher: No output filepath specified for notes, defaulting to '{output_filepath}' in current directory.")
+                # Let's implement the better default path strategy here now.
+                from pathlib import Path
+                try:
+                    # Try to use ~/Documents/AgentNotes/agent_notes.md
+                    # On Windows, Path.home() / "Documents" is typical.
+                    # On Linux, it's often Path.home() / "Documents" as well, or just Path.home().
+                    # For simplicity and Windows target, we'll assume "Documents" exists or can be inferred.
+                    docs_dir_name = "Documents"
+                    home_path = Path.home()
+                    documents_path = home_path / docs_dir_name
+
+                    # Check if "Documents" directory actually exists, if not, use home.
+                    # This is a basic check; more robust would be OS-specific API calls.
+                    if not documents_path.is_dir():
+                        print(f"Dispatcher: '{documents_path}' not found or not a directory. Using home directory as base for notes.")
+                        documents_path = home_path # Fallback to home if "Documents" isn't there
+
+                    agent_notes_dir = documents_path / "AgentNotes"
+                    agent_notes_dir.mkdir(parents=True, exist_ok=True) # Create if not exists
+                    output_filepath = agent_notes_dir / "agent_notes.md"
+                    print(f"Dispatcher: No output filepath specified for notes, defaulting to '{output_filepath}'.")
+                except Exception as path_e:
+                    print(f"Dispatcher: Error creating default notes path: {path_e}. Defaulting to CWD.")
+                    output_filepath = "agent_generated_notes.md" # Fallback to CWD
+                    print(f"Dispatcher: Using fallback default notes path: '{output_filepath}'.")
 
             # 4. Determine title for the note
             actual_title = title
@@ -116,6 +139,7 @@ class TaskDispatcher:
             )
             if success:
                 print(f"Dispatcher: Successfully processed 'make_notes' for '{source_filepath}' into '{output_filepath}'.")
+                print(f"Dispatcher: Note content is an excerpt from the source file (up to 1000 characters).")
             else:
                 print(f"Dispatcher: Failed to save notes for '{source_filepath}'.")
         else:
