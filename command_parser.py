@@ -35,6 +35,14 @@ class CommandParser:
                 r"^create\s+word\s+doc\s+\"(?P<filepath>[^\"]+)\""
                 r"(?:\s+title\s+\"(?P<title>[^\"]+)\")?"
                 r"\s+content\s+\"(?P<content>[^\"]+)\"$", re.IGNORECASE), "create_word_doc"),
+            # Rename item
+            (re.compile(r"^rename\s+(?P<current_path>.+?)\s+to\s+(?P<new_path>.+)$", re.IGNORECASE), "rename_item"),
+            # System Info
+            (re.compile(r"^get\s+cpu\s+usage$", re.IGNORECASE), "get_cpu_usage"),
+            (re.compile(r"^get\s+memory\s+info$", re.IGNORECASE), "get_memory_info"),
+            (re.compile(r"^list\s+active\s+processes$", re.IGNORECASE), "list_processes"),
+            # Run script
+            (re.compile(r"^run\s+script\s+(?P<script_path>.+?)(?:\s+with\s+arguments\s+(?P<args>.+))?$", re.IGNORECASE), "run_script"),
         ]
 
     def parse_command(self, command_text: str) -> dict | None:
@@ -125,6 +133,25 @@ class CommandParser:
                             "title": title, # Will be None if not provided by regex
                             "content": content
                         }
+                elif action_type == "rename_item":
+                    current_path = match.group("current_path").strip().strip('\'"')
+                    new_path = match.group("new_path").strip().strip('\'"')
+                    if current_path and new_path:
+                        return {"action": "rename_item", "current_path": current_path, "new_path": new_path}
+                elif action_type == "get_cpu_usage":
+                    return {"action": "get_cpu_usage"}
+                elif action_type == "get_memory_info":
+                    return {"action": "get_memory_info"}
+                elif action_type == "list_processes":
+                    return {"action": "list_processes"}
+                elif action_type == "run_script":
+                    script_path = match.group("script_path").strip().strip('\'"')
+                    args_str = match.group("args")
+                    args_list = []
+                    if args_str:
+                        args_list = args_str.strip().split() # Simple split, consider shlex for robustness
+                    if script_path:
+                        return {"action": "run_script", "script_path": script_path, "args": args_list}
 
         print(f"Command not recognized: {command_text}")
         return None
@@ -179,8 +206,17 @@ if __name__ == "__main__":
         "create word doc \"test_doc.docx\" content \"Hello Word from Agent!\"",
         "create word doc \"report.docx\" title \"Monthly Report\" content \"Content of the report...\"",
         "create word doc \"no_title.docx\" content \"This doc has no explicit title in command.\"",
+        "rename old_file.txt to new_file_name.txt",
+        "rename \"C:\\folder\\doc with spaces.txt\" to \"C:\\folder\\new doc name.txt\"",
+        "get cpu usage",
+        "get memory info",
+        "list active processes",
+        "run script /path/to/my/script.py",
+        "run script \"C:\\scripts\\backup.bat\" with arguments --verbose -o results.log",
         "create word doc content \"missing filepath\"", # Invalid
-        "create word doc \"filepath_only.docx\" content" # Invalid
+        "create word doc \"filepath_only.docx\" content", # Invalid
+        "rename old.txt", # Invalid
+        "run script" # Invalid
     ]
 
     for cmd in commands_to_test:

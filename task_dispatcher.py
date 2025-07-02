@@ -214,7 +214,67 @@ class TaskDispatcher:
             else:
                 print("Dispatcher: 'create_word_doc' action missing filepath or content.")
 
-        else:
+        elif action == "rename_item":
+            current_path = structured_command.get("current_path")
+            new_path = structured_command.get("new_path")
+            if current_path and new_path:
+                self.os_interaction_module.rename_item(current_path, new_path)
+            else:
+                print("Dispatcher: 'rename_item' action missing current_path or new_path.")
+
+        elif action == "get_cpu_usage":
+            cpu_usage = self.os_interaction_module.get_cpu_usage()
+            if cpu_usage is not None:
+                print(f"Dispatcher: CPU Usage: {cpu_usage}%")
+            # os_interaction_module already prints errors if any
+
+        elif action == "get_memory_info":
+            memory_info = self.os_interaction_module.get_memory_info()
+            if memory_info:
+                print(f"Dispatcher: Memory Info: Total={memory_info.get('total_gb')}GB, Available={memory_info.get('available_gb')}GB, Used={memory_info.get('percent_used')}%")
+
+        elif action == "list_processes":
+            processes = self.os_interaction_module.get_active_processes()
+            if processes:
+                print(f"Dispatcher: Active Processes (first 5 of {len(processes)}):")
+                for p in processes[:5]: # Print first 5 for brevity
+                    print(f"  - PID: {p['pid']}, Name: {p['name']}, CPU: {p.get('cpu_percent', 'N/A')}%")
+            # os_interaction_module already prints if list is empty or error
+
+        elif action == "run_script":
+            script_path = structured_command.get("script_path")
+            args = structured_command.get("args", [])
+            if script_path:
+                result = self.os_interaction_module.execute_script(script_path, args)
+                print(f"Dispatcher: Script execution result for '{script_path}':")
+                print(f"  Success: {result['success']}")
+                print(f"  Return Code: {result['returncode']}")
+                if result['stdout']: print(f"  STDOUT:\n{result['stdout']}")
+                if result['stderr']: print(f"  STDERR:\n{result['stderr']}")
+            else:
+                print("Dispatcher: 'run_script' action missing script_path.")
+
+        # Refined delete_item handling for testing (will call twice if confirmation needed)
+        elif action == "delete_item": # Ensure this is processed AFTER other specific commands
+            path_to_delete = structured_command.get("path")
+            confirmed_in_cmd = structured_command.get("confirmed_in_command", False)
+
+            if path_to_delete:
+                if confirmed_in_cmd:
+                    print(f"Dispatcher: Deleting '{path_to_delete}' based on command confirmation.")
+                    self.os_interaction_module.delete_item(path_to_delete, require_confirmation=False)
+                else:
+                    print(f"Dispatcher: Checking if confirmation needed for delete '{path_to_delete}'.")
+                    _success, needs_confirmation_flag = self.os_interaction_module.delete_item(path_to_delete, require_confirmation=True)
+                    if needs_confirmation_flag:
+                        print(f"Dispatcher: USER CONFIRMATION REQUIRED to delete '{path_to_delete}'. Simulating 'yes' for test.")
+                        # Simulate user saying "yes" by calling again with require_confirmation=False
+                        self.os_interaction_module.delete_item(path_to_delete, require_confirmation=False)
+                    # else: item didn't exist or other issue, os_interaction_module already printed.
+            else:
+                print("Dispatcher: 'delete_item' action missing path.")
+
+        else: # This should be the final else
             print(f"Dispatcher: Unknown action type '{action}'. No module to handle it.")
 
 # Example Usage (for testing the dispatcher with other modules)
@@ -252,7 +312,13 @@ async def main_test():
     (folder_X / "file_X1.txt").write_text("Content of File X1 in FolderX.")
 
     os_ops_dest_dir = test_dir / "os_ops_destination"
-    # Do not create os_ops_dest_dir yet, let operations create it if needed or test creation.
+    # os_ops_dest_dir.mkdir(exist_ok=True) # Create if needed for some tests, or let ops create.
+
+    # Dummy script for run_script test
+    dummy_py_script_for_dispatcher = test_dir / "dispatcher_test_script.py"
+    dummy_py_script_for_dispatcher.write_text(
+        "import sys\nprint(f'Script says hello! Args: {sys.argv[1:]}')\nsys.exit(0)"
+    )
 
     test_commands = [
         # Web ops
@@ -281,6 +347,19 @@ async def main_test():
         # Word doc commands
         f"create word doc \"{str(test_dir / 'AgentWordDoc1.docx')}\" content \"This is the first Word doc from agent.\"",
         f"create word doc \"{str(test_dir / 'AgentWordDoc2_titled.docx')}\" title \"My Document Title\" content \"Some interesting content here.\"",
+
+        # New OS commands for rename, sysinfo, run script
+        f"rename {str(os_ops_source_dir / 'file_A.txt')} to {str(os_ops_source_dir / 'file_A_renamed.txt')}",
+        "get cpu usage",
+        "get memory info",
+        "list active processes",
+        f"run script {str(dummy_py_script_for_dispatcher)} with arguments test_arg1 test_arg2",
+        # Delete test commands (will be handled carefully, likely via direct dispatch or specific setup)
+        # Example: "delete temp_dispatcher_test_files/os_ops_source/file_A_renamed.txt"
+        # Note: For sequential command list, ensure dependent operations are logical.
+        # We will test delete more robustly via direct dispatch.
+        "delete temp_dispatcher_test_files/os_ops_source/no_such_file.txt with confirmation yes", # test delete non-existent
+
         # End of regular test commands
         "fly to the moon", # Unrecognized
         "find file *.log" # Test finding in home directory (can be many) - can be slow
@@ -316,11 +395,18 @@ async def main_test():
         # Setup for a direct delete test
         {'action': 'delete_item', 'path': str(os_ops_source_dir / "file_to_delete_directly.txt"), 'confirmed_in_command': True},
         # Launch test (ls should work on Linux/Codespaces)
-        {'action': 'launch_app', 'application': 'ls', 'args': ['-la', str(test_dir)]}
+        {'action': 'launch_app', 'application': 'ls', 'args': ['-la', str(test_dir)]},
+        # Specific delete tests for dispatcher logic
+        {'action': 'delete_item', 'path': str(os_ops_source_dir / "file_for_dispatch_delete_confirm_yes.txt"), 'confirmed_in_command': True},
+        {'action': 'delete_item', 'path': str(os_ops_source_dir / "file_for_dispatch_delete_no_confirm.txt"), 'confirmed_in_command': False}, # Dispatcher will simulate "yes"
+        # Specific run_script test
+        {'action': 'run_script', 'script_path': str(dummy_py_script_for_dispatcher), 'args': ['dispatch_arg']}
     ]
 
-    # Create a file for the direct delete test
-    (os_ops_source_dir / "file_to_delete_directly.txt").write_text("This file will be deleted by direct dispatch.")
+    # Create files for the direct delete tests
+    (os_ops_source_dir / "file_for_dispatch_delete_confirm_yes.txt").write_text("Delete me with cmd confirm.")
+    (os_ops_source_dir / "file_for_dispatch_delete_no_confirm.txt").write_text("Delete me with dispatcher confirm.")
+
 
     for s_cmd in valid_structured_commands:
         print(f"\nDispatching structured command: {s_cmd}")

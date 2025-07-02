@@ -336,7 +336,10 @@ class OSInteractionModule:
                 else:
                     print(f"Failed to launch Notepad for '{temp_filepath}'.")
                     # Clean up the temp file if notepad couldn't even be launched
-                    try: os.remove(temp_filepath) catch: pass
+                    try:
+                        os.remove(temp_filepath)
+                    except Exception: # Silently ignore if removal fails
+                        pass
                     return False
             else:
                 print(f"Notepad integration is Windows-specific. On {sys.platform}, file saved at '{temp_filepath}' but not opened with Notepad.")
@@ -386,6 +389,185 @@ class OSInteractionModule:
         except Exception as e:
             print(f"Error creating Word document '{filepath}': {e}")
             return False
+
+    def rename_item(self, current_path: str, new_full_path: str) -> bool:
+        """
+        Renames or moves a file or directory.
+        This is essentially a wrapper for os.rename().
+
+        :param current_path: The current path of the file or directory.
+        :param new_full_path: The new, full path (including new name) for the file or directory.
+                              If this path is in a different directory, it's a move+rename.
+                              If it's in the same directory but different name, it's a rename.
+        :return: True if successful, False otherwise.
+        """
+        print(f"Attempting to rename/move '{current_path}' to '{new_full_path}'")
+        try:
+            if not os.path.exists(current_path):
+                print(f"Error: Source path '{current_path}' does not exist.")
+                return False
+
+            # Ensure the parent directory of the new path exists
+            new_parent_dir = os.path.dirname(new_full_path)
+            if new_parent_dir and not os.path.exists(new_parent_dir):
+                os.makedirs(new_parent_dir)
+                print(f"Created destination directory for rename/move: {new_parent_dir}")
+
+            os.rename(current_path, new_full_path)
+            print(f"Successfully renamed/moved '{current_path}' to '{new_full_path}'.")
+            return True
+        except Exception as e:
+            print(f"Error renaming/moving '{current_path}' to '{new_full_path}': {e}")
+            return False
+
+    def get_cpu_usage(self) -> float | None:
+        """
+        Gets the current system-wide CPU utilization percentage.
+        :return: CPU usage percentage, or None if an error occurs.
+        """
+        try:
+            import psutil
+            cpu_percent = psutil.cpu_percent(interval=0.1) # Non-blocking, get a snapshot
+            print(f"Current CPU Usage: {cpu_percent}%")
+            return cpu_percent
+        except ImportError:
+            print("Error: psutil library not found. Please install it using 'pip install psutil'.")
+            return None
+        except Exception as e:
+            print(f"Error getting CPU usage: {e}")
+            return None
+
+    def get_memory_info(self) -> dict | None:
+        """
+        Gets system memory information (total, available, percent used).
+        :return: A dictionary with keys 'total', 'available', 'percent_used', 'used', 'free',
+                 or None if an error occurs. Values are in bytes for total, available, used, free.
+        """
+        try:
+            import psutil
+            mem_info = psutil.virtual_memory()
+            info = {
+                "total_gb": round(mem_info.total / (1024**3), 2),
+                "available_gb": round(mem_info.available / (1024**3), 2),
+                "percent_used": mem_info.percent,
+                "used_gb": round(mem_info.used / (1024**3), 2),
+                "free_gb": round(mem_info.free / (1024**3), 2)
+            }
+            print(f"Memory Info: Total={info['total_gb']}GB, Available={info['available_gb']}GB, Used={info['percent_used']}%")
+            return info
+        except ImportError:
+            print("Error: psutil library not found. Please install it using 'pip install psutil'.")
+            return None
+        except Exception as e:
+            print(f"Error getting memory info: {e}")
+            return None
+
+    def get_active_processes(self, max_processes: int = 20) -> list[dict] | None:
+        """
+        Gets a list of active processes with their PID, name, and CPU percent.
+        Limits the number of processes returned to max_processes.
+        :param max_processes: Maximum number of process details to return.
+        :return: A list of dictionaries, each with 'pid', 'name', 'cpu_percent',
+                 or None if an error occurs.
+        """
+        try:
+            import psutil
+            processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent']):
+                try:
+                    processes.append(proc.info)
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass # Process might have terminated or access is denied
+
+            # Sort by CPU percent (descending) and take top N
+            processes = sorted(processes, key=lambda p: p.get('cpu_percent', 0) if p.get('cpu_percent') is not None else 0, reverse=True)
+            limited_processes = processes[:max_processes]
+
+            print(f"Active Processes (Top {max_processes} by CPU usage):")
+            for p_info in limited_processes:
+                print(f"  - PID: {p_info['pid']}, Name: {p_info['name']}, CPU: {p_info.get('cpu_percent', 'N/A')}%")
+            return limited_processes
+        except ImportError:
+            print("Error: psutil library not found. Please install it using 'pip install psutil'.")
+            return None
+        except Exception as e:
+            print(f"Error getting active processes: {e}")
+            return None
+
+    def execute_script(self, script_path: str, script_args: list[str] = None) -> dict:
+        """
+        Executes a script (.py, .bat, .sh) and captures its output.
+
+        :param script_path: Absolute path to the script.
+        :param script_args: Optional list of arguments for the script.
+        :return: A dictionary containing {'stdout': str, 'stderr': str, 'returncode': int, 'success': bool}.
+                 'success' is True if returncode is 0.
+        """
+        if script_args is None:
+            script_args = []
+
+        if not os.path.exists(script_path) or not os.path.isfile(script_path):
+            print(f"Error: Script not found or is not a file: {script_path}")
+            return {"stdout": "", "stderr": f"Script not found: {script_path}", "returncode": -1, "success": False}
+
+        import subprocess
+        import sys
+
+        command = []
+        ext = os.path.splitext(script_path)[1].lower()
+
+        if ext == ".py":
+            command.append(sys.executable) # Use the current python interpreter
+            command.append(script_path)
+            command.extend(script_args)
+        elif ext in [".bat", ".sh"]: # .sh for Linux/macOS, .bat for Windows
+            if sys.platform == "win32" and ext == ".sh":
+                # Running .sh on Windows might need WSL or similar, not directly supported here simply.
+                # Or user might have sh.exe via Git Bash etc.
+                # For now, assume .bat for windows, .sh for posix.
+                print(f"Warning: Attempting to run .sh script on Windows. May require specific setup (e.g., Git Bash in PATH).")
+                command.append(script_path) # Hope it's directly executable or in PATH with an interpreter
+                command.extend(script_args)
+            elif sys.platform != "win32" and ext == ".bat":
+                print(f"Warning: Attempting to run .bat script on non-Windows. May not work as expected.")
+                command.append(script_path)
+                command.extend(script_args)
+            else: # .bat on Windows, .sh on Linux/macOS
+                command.append(script_path)
+                command.extend(script_args)
+        else:
+            print(f"Error: Unsupported script type: {ext}. Only .py, .bat, .sh are directly supported.")
+            return {"stdout": "", "stderr": f"Unsupported script type: {ext}", "returncode": -1, "success": False}
+
+        print(f"Executing script: {' '.join(command)}")
+        try:
+            # Using shell=True for .bat/.sh might be more idiomatic on Windows for .bat,
+            # but can be risky if script_path or args are not fully controlled.
+            # For .py, sys.executable handles it. For .sh/.bat direct, shell=False is safer if they have shebangs/are executable.
+            # If script_path itself has spaces, and shell=False, command list handles it.
+            # Let's try shell=False for direct .bat/.sh calls and rely on execute permissions / shebangs.
+            # If issues arise, especially on Windows for .bat, shell=True for that case might be needed.
+
+            process = subprocess.run(command, capture_output=True, text=True, check=False) # check=False to not raise on non-zero exit
+
+            stdout = process.stdout.strip()
+            stderr = process.stderr.strip()
+            returncode = process.returncode
+            success = returncode == 0
+
+            print(f"Script execution finished. Return code: {returncode}")
+            if stdout: print(f"Script STDOUT:\n{stdout}")
+            if stderr: print(f"Script STDERR:\n{stderr}")
+
+            return {"stdout": stdout, "stderr": stderr, "returncode": returncode, "success": success}
+
+        except FileNotFoundError:
+             print(f"Error: Interpreter or script not found for command: {' '.join(command)}")
+             return {"stdout": "", "stderr": "File not found during execution.", "returncode": -1, "success": False}
+        except Exception as e:
+            print(f"Error executing script '{script_path}': {e}")
+            return {"stdout": "", "stderr": str(e), "returncode": -1, "success": False}
+
 
 # Example Usage (for testing this module directly)
 if __name__ == "__main__":
@@ -709,6 +891,140 @@ if __name__ == "__main__":
         print(f"Verified: Word document '{word_doc_path}' created.")
     else:
         print(f"Verification FAILED for Word document creation. Exists: {word_doc_path.exists()}")
+
+    print("\n--- Testing rename_item ---")
+    rename_base = test_dir / "rename_base"
+    rename_base.mkdir(exist_ok=True)
+
+    # Test 1: Rename a file in the same directory
+    file_to_rename_1 = rename_base / "original_name.txt"
+    file_to_rename_1.write_text("Content for rename test 1.")
+    new_name_1 = rename_base / "renamed_file.txt"
+    print(f"\nRenaming file in place: '{file_to_rename_1}' to '{new_name_1}'")
+    os_interaction.rename_item(str(file_to_rename_1), str(new_name_1))
+    if not file_to_rename_1.exists() and new_name_1.exists():
+        print(f"Verified: Rename successful. '{new_name_1}' content: '{new_name_1.read_text()}'")
+    else:
+        print(f"Verification FAILED for file rename in place. Original exists: {file_to_rename_1.exists()}, New exists: {new_name_1.exists()}")
+
+    # Test 2: Move and rename a file to a new directory
+    file_to_rename_2 = rename_base / "another_original.txt" # Recreate for this test
+    file_to_rename_2.write_text("Content for rename test 2 (move).")
+    new_dir_for_rename = test_dir / "rename_destination_dir"
+    # new_dir_for_rename.mkdir(exist_ok=True) # Let rename_item create it
+    new_path_2 = new_dir_for_rename / "moved_and_renamed.txt"
+    print(f"\nMoving and renaming file: '{file_to_rename_2}' to '{new_path_2}'")
+    os_interaction.rename_item(str(file_to_rename_2), str(new_path_2))
+    if not file_to_rename_2.exists() and new_path_2.exists():
+        print(f"Verified: Move and rename successful. '{new_path_2}' content: '{new_path_2.read_text()}'")
+    else:
+        print(f"Verification FAILED for file move+rename. Original exists: {file_to_rename_2.exists()}, New exists: {new_path_2.exists()}")
+        if new_dir_for_rename.exists(): print(f"Destination directory '{new_dir_for_rename}' was created.")
+
+
+    # Test 3: Rename a directory
+    dir_to_rename_1 = rename_base / "original_dir_name"
+    dir_to_rename_1.mkdir(exist_ok=True)
+    (dir_to_rename_1 / "dummy.txt").write_text("dummy in dir_to_rename_1")
+    new_dir_name_1 = rename_base / "renamed_dir"
+    print(f"\nRenaming directory in place: '{dir_to_rename_1}' to '{new_dir_name_1}'")
+    os_interaction.rename_item(str(dir_to_rename_1), str(new_dir_name_1))
+    if not dir_to_rename_1.exists() and new_dir_name_1.is_dir() and (new_dir_name_1 / "dummy.txt").exists():
+        print(f"Verified: Directory rename successful.")
+    else:
+        print(f"Verification FAILED for directory rename. Original exists: {dir_to_rename_1.exists()}, New exists: {new_dir_name_1.exists()}")
+
+    # Test 4: Move and rename a directory
+    dir_to_rename_2 = rename_base / "another_original_dir" # Recreate
+    dir_to_rename_2.mkdir(exist_ok=True)
+    (dir_to_rename_2 / "dummy2.txt").write_text("dummy in another_original_dir")
+    new_dir_path_for_rename = test_dir / "dir_move_destination" / "moved_and_renamed_dir"
+    print(f"\nMoving and renaming directory: '{dir_to_rename_2}' to '{new_dir_path_for_rename}'")
+    os_interaction.rename_item(str(dir_to_rename_2), str(new_dir_path_for_rename))
+    if not dir_to_rename_2.exists() and Path(new_dir_path_for_rename).is_dir() and (Path(new_dir_path_for_rename) / "dummy2.txt").exists():
+        print(f"Verified: Directory move and rename successful.")
+    else:
+        print(f"Verification FAILED for directory move+rename. Original exists: {dir_to_rename_2.exists()}, New exists: {Path(new_dir_path_for_rename).exists()}")
+
+    # Test 5: Rename non-existent source
+    print("\nRenaming non-existent source:")
+    os_interaction.rename_item("path/to/non_existent_rename_source.txt", "new_name.txt")
+
+    print("\n--- Testing System Info ---")
+    print("\nGetting CPU Usage:")
+    cpu = os_interaction.get_cpu_usage()
+    if cpu is not None:
+        print(f"Reported CPU Usage: {cpu}%")
+
+    print("\nGetting Memory Info:")
+    memory = os_interaction.get_memory_info()
+    if memory:
+        print(f"Reported Memory: {memory}")
+
+    print("\nGetting Active Processes (Top 5):")
+    processes = os_interaction.get_active_processes(max_processes=5)
+    if processes:
+        print(f"Reported Processes (first few): {processes[:2]}") # Print first 2 for brevity in overall test log
+
+    print("\n--- Testing execute_script ---")
+    # Create a dummy python script for testing
+    dummy_py_script_path = test_dir / "dummy_test_script.py"
+    py_script_content = """
+import sys
+print(f"Hello from Python script! Args: {sys.argv[1:]}")
+if len(sys.argv) > 1 and sys.argv[1] == "error":
+    print("This is a test error message to stderr.", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+"""
+    dummy_py_script_path.write_text(py_script_content)
+
+    print("\nExecuting dummy Python script (success case):")
+    py_result_ok = os_interaction.execute_script(str(dummy_py_script_path), ["arg1", "val1"])
+    print(f"Python script (success) result: {py_result_ok}")
+
+    print("\nExecuting dummy Python script (error case):")
+    py_result_err = os_interaction.execute_script(str(dummy_py_script_path), ["error"])
+    print(f"Python script (error) result: {py_result_err}")
+
+    # Create a dummy shell script (works on Linux/macOS, like Codespaces)
+    dummy_sh_script_path = test_dir / "dummy_test_script.sh"
+    sh_script_content = """
+#!/bin/bash
+echo "Hello from Shell script! Args: $@"
+if [ "$1" == "fail" ]; then
+  >&2 echo "Shell script error message."
+  exit 1
+fi
+exit 0
+"""
+    dummy_sh_script_path.write_text(sh_script_content)
+    # Make it executable (important for Linux/macOS)
+    import stat
+    dummy_sh_script_path.chmod(dummy_sh_script_path.stat().st_mode | stat.S_IEXEC)
+
+    # Test shell script execution (behavior might differ on Windows if no sh interpreter)
+    import sys
+    if sys.platform != "win32": # Only run .sh test meaningfully on non-Windows
+        print("\nExecuting dummy Shell script (success case):")
+        sh_result_ok = os_interaction.execute_script(str(dummy_sh_script_path), ["hello", "world"])
+        print(f"Shell script (success) result: {sh_result_ok}")
+
+        print("\nExecuting dummy Shell script (error case):")
+        sh_result_err = os_interaction.execute_script(str(dummy_sh_script_path), ["fail"])
+        print(f"Shell script (error) result: {sh_result_err}")
+    else:
+        print("\nSkipping .sh script execution test on Windows (would require specific setup like WSL/Git Bash in PATH).")
+
+    print("\nExecuting non-existent script:")
+    non_existent_result = os_interaction.execute_script("path/to/non_existent_script.py")
+    print(f"Non-existent script result: {non_existent_result}")
+
+    print("\nExecuting unsupported script type:")
+    unsupported_script_path = test_dir / "dummy.unsupported"
+    unsupported_script_path.write_text("content")
+    unsupported_result = os_interaction.execute_script(str(unsupported_script_path))
+    print(f"Unsupported script result: {unsupported_result}")
 
 
     # Clean up dummy files and directories
