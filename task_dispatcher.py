@@ -142,6 +142,78 @@ class TaskDispatcher:
                 print(f"Dispatcher: Note content is an excerpt from the source file (up to 1000 characters).")
             else:
                 print(f"Dispatcher: Failed to save notes for '{source_filepath}'.")
+
+        elif action == "copy_item":
+            source = structured_command.get("source")
+            destination = structured_command.get("destination")
+            if source and destination:
+                self.os_interaction_module.copy_item(source, destination)
+            else:
+                print("Dispatcher: 'copy_item' action missing source or destination.")
+
+        elif action == "move_item":
+            source = structured_command.get("source")
+            destination = structured_command.get("destination")
+            if source and destination:
+                self.os_interaction_module.move_item(source, destination)
+            else:
+                print("Dispatcher: 'move_item' action missing source or destination.")
+
+        elif action == "delete_item":
+            path_to_delete = structured_command.get("path")
+            confirmed_in_cmd = structured_command.get("confirmed_in_command", False) # Default to False
+
+            if path_to_delete:
+                if confirmed_in_cmd:
+                    # User typed "delete ... with confirmation yes"
+                    print(f"Dispatcher: Deleting '{path_to_delete}' based on command confirmation.")
+                    self.os_interaction_module.delete_item(path_to_delete, require_confirmation=False)
+                else:
+                    # Default behavior: check if confirmation is needed from module.
+                    # In a real UI, this is where we'd prompt the user.
+                    # For now, we'll simulate the first call that just checks.
+                    print(f"Dispatcher: Checking if confirmation needed for delete '{path_to_delete}'.")
+                    _success, needs_confirmation_flag = self.os_interaction_module.delete_item(path_to_delete, require_confirmation=True)
+                    if needs_confirmation_flag:
+                        # This is where a real agent would ask user: "Are you sure you want to delete X? (yes/no)"
+                        # For this test script, we'll just log it.
+                        # If running main_agent, the UI would handle this.
+                        print(f"Dispatcher: USER CONFIRMATION REQUIRED to delete '{path_to_delete}'. (Simulated: Not deleting yet).")
+                        # To actually delete in a test like this, one might add a follow-up simulated command,
+                        # or the test setup would call delete_item(..., require_confirmation=False)
+                    # else: item didn't exist or some other issue, os_interaction_module already printed.
+            else:
+                print("Dispatcher: 'delete_item' action missing path.")
+
+        elif action == "launch_app":
+            application = structured_command.get("application")
+            args = structured_command.get("args", []) # Default to empty list
+            if application:
+                self.os_interaction_module.launch_application(application, args)
+            else:
+                print("Dispatcher: 'launch_app' action missing application name/path.")
+
+        elif action == "notepad_note":
+            title = structured_command.get("title")
+            content = structured_command.get("content")
+            if title is not None and content is not None: # Both must be present, though can be empty strings
+                self.os_interaction_module.create_note_in_notepad(title=title, content=content)
+            else:
+                print("Dispatcher: 'notepad_note' action missing title or content.")
+
+        elif action == "create_word_doc":
+            filepath = structured_command.get("filepath")
+            title = structured_command.get("title") # Can be None
+            content = structured_command.get("content")
+            if filepath and content is not None:
+                self.os_interaction_module.create_word_document(
+                    filepath=filepath,
+                    title=title,
+                    content=content
+                )
+            else:
+                print("Dispatcher: 'create_word_doc' action missing filepath or content.")
+
         else:
             print(f"Dispatcher: Unknown action type '{action}'. No module to handle it.")
 
@@ -165,13 +237,28 @@ async def main_test():
     test_dir.mkdir(exist_ok=True)
     (test_dir / "sample.txt").write_text("This is a sample text file for dispatcher testing. It has enough content to be truncated for note-making if the limit is small. Let's add more lines. Line 2. Line 3. Line 4. Line 5. This should definitely be more than a few characters, allowing us to test truncation. The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. This is a very long line to ensure we hit the 1000 character limit for notes if possible and see the truncation message in action during the test run. We need a lot of text to verify this particular feature of the note-making process. Adding even more filler text to be absolutely sure. One two three four five six seven eight nine ten. Eleven twelve thirteen fourteen fifteen. Sixteen seventeen eighteen nineteen twenty. This should be plenty.")
     (test_dir / "another_doc.txt").write_text("Another document here.")
-    (test_dir / "report_final.pdf").write_text("PDF content (pretend).")
-    source_note_file = test_dir / "source_for_notes.txt"
+    (test_dir / "report_final.pdf").write_text("PDF content (pretend).") # For find/read tests
+
+    source_note_file = test_dir / "source_for_notes.txt" # For make_notes tests
     source_note_file.write_text("This is the source file from which notes will be made.\nIt has multiple lines.\nThis is the third line, which might be included in a short note.")
 
+    # Setup for copy/move/delete tests
+    os_ops_source_dir = test_dir / "os_ops_source"
+    os_ops_source_dir.mkdir(exist_ok=True)
+    (os_ops_source_dir / "file_A.txt").write_text("Content of File A for OS Ops.")
+    (os_ops_source_dir / "file_B.txt").write_text("Content of File B for OS Ops.")
+    folder_X = os_ops_source_dir / "FolderX"
+    folder_X.mkdir(exist_ok=True)
+    (folder_X / "file_X1.txt").write_text("Content of File X1 in FolderX.")
+
+    os_ops_dest_dir = test_dir / "os_ops_destination"
+    # Do not create os_ops_dest_dir yet, let operations create it if needed or test creation.
+
     test_commands = [
+        # Web ops
         "go to google.com",
         "web search for python async",
+        # File find/read/make_notes from previous tests
         f"find file *.txt in {str(test_dir.resolve())}",
         f"find file report_final.pdf in {str(test_dir.resolve())}",
         "find file non_existent_pattern.dat", # Will search home dir
@@ -181,10 +268,22 @@ async def main_test():
         f"make notes from {str(source_note_file.resolve())}", # Default output and title
         f"make notes from {str(source_note_file.resolve())} to {str(test_dir / 'custom_notes.md')}", # Custom output, default title
         f"make notes from {str(source_note_file.resolve())} titled \"My Custom Note Title\"", # Default output, custom title
-        f"make notes from {str(source_note_file.resolve())} to {str(test_dir / 'final_notes.txt')} titled \"Final Lecture Notes\"", # All custom
-        "make notes from /path/to/non_existent_source.txt", # Test non-existent source
+        f"make notes from {str(source_note_file.resolve())} to {str(test_dir / 'final_notes.txt')} titled \"Final Lecture Notes\"",
+        "make notes from /path/to/non_existent_source.txt",
+        # OS commands
+        f"copy {str(os_ops_source_dir / 'file_A.txt')} to {str(os_ops_dest_dir / 'file_A_copied.txt')}",
+        f"copy {str(folder_X)} to {str(os_ops_dest_dir / 'FolderX_copied')}",
+        f"move {str(os_ops_source_dir / 'file_B.txt')} to {str(os_ops_dest_dir / 'file_B_moved.txt')}",
+        "launch notepad.exe",
+        "launch app_that_doesnt_exist",
+        # Notepad note command
+        "notepad note title \"Test Note for Dispatcher\" content \"This is content for notepad via dispatcher.\"",
+        # Word doc commands
+        f"create word doc \"{str(test_dir / 'AgentWordDoc1.docx')}\" content \"This is the first Word doc from agent.\"",
+        f"create word doc \"{str(test_dir / 'AgentWordDoc2_titled.docx')}\" title \"My Document Title\" content \"Some interesting content here.\"",
+        # End of regular test commands
         "fly to the moon", # Unrecognized
-        "find file *.log" # Test finding in home directory (can be many)
+        "find file *.log" # Test finding in home directory (can be many) - can be slow
     ]
 
     print("--- Starting Task Dispatcher Test ---")
@@ -205,15 +304,24 @@ async def main_test():
     valid_structured_commands = [
         {'action': 'goto', 'url': 'dev.to'},
         {'action': 'web_search', 'query': 'python tkinter tutorial'},
-        {'action': 'find_file', 'pattern': '*.py', 'path': '.'}, # Find .py files in current dir
+        {'action': 'find_file', 'pattern': '*.py', 'path': '.'},
         {'action': 'read_file', 'filepath': str((test_dir / 'sample.txt').resolve())},
         {
             'action': 'make_notes',
             'source_filepath': str(source_note_file.resolve()),
             'output_filepath': str(test_dir / 'direct_dispatch_notes.md'),
             'title': 'Direct Dispatch Note Test'
-        }
+        },
+        # Specific OS ops for direct dispatch test
+        # Setup for a direct delete test
+        {'action': 'delete_item', 'path': str(os_ops_source_dir / "file_to_delete_directly.txt"), 'confirmed_in_command': True},
+        # Launch test (ls should work on Linux/Codespaces)
+        {'action': 'launch_app', 'application': 'ls', 'args': ['-la', str(test_dir)]}
     ]
+
+    # Create a file for the direct delete test
+    (os_ops_source_dir / "file_to_delete_directly.txt").write_text("This file will be deleted by direct dispatch.")
+
     for s_cmd in valid_structured_commands:
         print(f"\nDispatching structured command: {s_cmd}")
         await dispatcher.dispatch(s_cmd)

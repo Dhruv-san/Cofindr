@@ -22,6 +22,19 @@ class CommandParser:
                 r"^make\s+notes\s+from\s+(?P<source_filepath>.+?)"
                 r"(?:\s+to\s+(?P<output_filepath>.+?))?"
                 r"(?:\s+titled\s+(?P<title>.+))?$", re.IGNORECASE), "make_notes"),
+            # OS Operations
+            (re.compile(r"^copy\s+(?P<source>.+?)\s+to\s+(?P<destination>.+)$", re.IGNORECASE), "copy_item"),
+            (re.compile(r"^move\s+(?P<source>.+?)\s+to\s+(?P<destination>.+)$", re.IGNORECASE), "move_item"),
+            (re.compile(r"^delete\s+(?P<path>.+?)(?:\s+with\s+confirmation\s+(?P<confirmation>yes|no))?$", re.IGNORECASE), "delete_item"),
+            # Launch: launch <app_path_or_name> (with arguments <args_string>)
+            (re.compile(r"^launch\s+(?P<application>.+?)(?:\s+with\s+arguments\s+(?P<args>.+))?$", re.IGNORECASE), "launch_app"),
+            # Notepad note: notepad note title "<title>" content "<content>"
+            (re.compile(r"^notepad\s+note\s+title\s+\"(?P<title>[^\"]+)\"\s+content\s+\"(?P<content>[^\"]+)\"$", re.IGNORECASE), "notepad_note"),
+            # Create Word Doc: create word doc "<filepath>" (title "<title>") content "<content>"
+            (re.compile(
+                r"^create\s+word\s+doc\s+\"(?P<filepath>[^\"]+)\""
+                r"(?:\s+title\s+\"(?P<title>[^\"]+)\")?"
+                r"\s+content\s+\"(?P<content>[^\"]+)\"$", re.IGNORECASE), "create_word_doc"),
         ]
 
     def parse_command(self, command_text: str) -> dict | None:
@@ -69,6 +82,49 @@ class CommandParser:
                             "output_filepath": output_filepath.strip().strip('\'"') if output_filepath else None,
                             "title": title.strip().strip('\'"') if title else None
                         }
+                elif action_type == "copy_item":
+                    source = match.group("source").strip().strip('\'"')
+                    destination = match.group("destination").strip().strip('\'"')
+                    if source and destination:
+                        return {"action": "copy_item", "source": source, "destination": destination}
+                elif action_type == "move_item":
+                    source = match.group("source").strip().strip('\'"')
+                    destination = match.group("destination").strip().strip('\'"')
+                    if source and destination:
+                        return {"action": "move_item", "source": source, "destination": destination}
+                elif action_type == "delete_item":
+                    path_to_delete = match.group("path").strip().strip('\'"')
+                    confirmation = match.group("confirmation") # 'yes', 'no', or None
+                    if path_to_delete:
+                        # If confirmation is "no" or not given, it means dispatcher needs to handle confirmation.
+                        # If "yes", it means user confirmed in command.
+                        needs_os_confirm_flag = not (confirmation and confirmation.lower() == "yes")
+                        return {"action": "delete_item", "path": path_to_delete, "confirmed_in_command": (confirmation and confirmation.lower() == "yes")}
+                elif action_type == "launch_app":
+                    application = match.group("application").strip().strip('\'"')
+                    args_str = match.group("args")
+                    args_list = []
+                    if args_str:
+                        # Simple split by space for args. Could use shlex for more robust parsing.
+                        args_list = args_str.strip().split()
+                    if application:
+                        return {"action": "launch_app", "application": application, "args": args_list}
+                elif action_type == "notepad_note":
+                    title = match.group("title") # No need to strip quotes due to regex [^\"]+
+                    content = match.group("content")
+                    if title is not None and content is not None: # title can be empty string if user types ""
+                        return {"action": "notepad_note", "title": title, "content": content}
+                elif action_type == "create_word_doc":
+                    filepath = match.group("filepath")
+                    title = match.group("title") # Optional, so can be None
+                    content = match.group("content")
+                    if filepath and content is not None: # Filepath and content are essential
+                        return {
+                            "action": "create_word_doc",
+                            "filepath": filepath,
+                            "title": title, # Will be None if not provided by regex
+                            "content": content
+                        }
 
         print(f"Command not recognized: {command_text}")
         return None
@@ -95,6 +151,20 @@ if __name__ == "__main__":
         "make notes from \"another document.txt\" to my_notes.md",
         "make notes from important_lecture.txt titled \"Lecture Highlights\"",
         "make notes from research_paper.pdf to research_summary.txt titled \"Paper Summary\"",
+        "copy fileA.txt to folderB/",
+        "copy \"C:\\My Files\\report.docx\" to \"D:\\Backup Reports\\report_backup.docx\"",
+        "move old_folder to archive/old_folder_moved",
+        "move \"file with spaces.txt\" to \"another location/\"",
+        "delete important_file.doc",
+        "delete output_directory with confirmation yes",
+        "delete temp_file.tmp with confirmation no",
+        "launch notepad.exe",
+        "launch calc",
+        "launch /usr/bin/git with arguments --version -v",
+        "launch my_script.py with arguments input.txt output.log",
+        "notepad note title \"Shopping List\" content \"Milk, Eggs, Bread\"",
+        "notepad note title \"Quick Idea\" content \"Develop a Python agent!\"",
+        "notepad note title \"\" content \"Content for untitled note\"", # Test empty title
         "random command that should not match",
         "open",
         "search", # This alone won't match web_search without a query
@@ -102,6 +172,15 @@ if __name__ == "__main__":
         "read file", # Incomplete
         "go to ",
         "make notes from", # Incomplete
+        "copy fileA", # Incomplete
+        "delete", # Incomplete
+        "launch", # Incomplete
+        "notepad note title something content somethingelse", # Missing quotes
+        "create word doc \"test_doc.docx\" content \"Hello Word from Agent!\"",
+        "create word doc \"report.docx\" title \"Monthly Report\" content \"Content of the report...\"",
+        "create word doc \"no_title.docx\" content \"This doc has no explicit title in command.\"",
+        "create word doc content \"missing filepath\"", # Invalid
+        "create word doc \"filepath_only.docx\" content" # Invalid
     ]
 
     for cmd in commands_to_test:

@@ -133,6 +133,260 @@ class OSInteractionModule:
             print(f"Error saving note to file '{output_filepath}': {e}")
             return False
 
+    def copy_item(self, source_path: str, destination_path: str) -> bool:
+        """
+        Copies a file or directory from source_path to destination_path.
+        If destination_path is a directory, the item is copied inside it.
+        If destination_path is a full path (including filename for files), it's copied to that exact path.
+        Overwrites if destination file exists. Creates destination directories if they don't exist.
+
+        :param source_path: Path to the source file or directory.
+        :param destination_path: Path to the destination file or directory.
+        :return: True if successful, False otherwise.
+        """
+        print(f"Attempting to copy '{source_path}' to '{destination_path}'")
+        import shutil
+        try:
+            if not os.path.exists(source_path):
+                print(f"Error: Source path '{source_path}' does not exist.")
+                return False
+
+            # Ensure destination directory exists if destination_path is a full file path
+            dest_dir = os.path.dirname(destination_path)
+            if dest_dir and not os.path.basename(destination_path) == "": # i.e. dest_path is not just a dir like "folder/"
+                 if not os.path.exists(dest_dir):
+                    os.makedirs(dest_dir)
+                    print(f"Created destination directory: {dest_dir}")
+            elif not dest_dir and os.path.basename(destination_path) == "" and not os.path.exists(destination_path): #e.g. copying to "new_folder/"
+                os.makedirs(destination_path)
+                print(f"Created destination directory: {destination_path}")
+
+
+            if os.path.isdir(source_path):
+                # If destination is an existing directory, copy source_path *into* it
+                if os.path.isdir(destination_path):
+                    shutil.copytree(source_path, os.path.join(destination_path, os.path.basename(source_path)), dirs_exist_ok=True)
+                else: # If destination is a new directory name or if it's a file (which shutil.copytree handles by replacing)
+                    shutil.copytree(source_path, destination_path, dirs_exist_ok=True)
+            else: # It's a file
+                shutil.copy2(source_path, destination_path) # copy2 preserves metadata
+
+            print(f"Successfully copied '{source_path}' to '{destination_path}'.")
+            return True
+        except Exception as e:
+            print(f"Error copying '{source_path}' to '{destination_path}': {e}")
+            return False
+
+    def move_item(self, source_path: str, destination_path: str) -> bool:
+        """
+        Moves a file or directory from source_path to destination_path.
+        Behavior is similar to the 'mv' command in Linux.
+        If destination_path is a directory, the item is moved inside it.
+        If destination_path is a full path, it renames/moves to that exact path.
+        Overwrites if destination file exists (shutil.move behavior).
+        Creates destination directories if they don't exist for the final target.
+
+        :param source_path: Path to the source file or directory.
+        :param destination_path: Path to the destination.
+        :return: True if successful, False otherwise.
+        """
+        print(f"Attempting to move '{source_path}' to '{destination_path}'")
+        import shutil
+        try:
+            if not os.path.exists(source_path):
+                print(f"Error: Source path '{source_path}' does not exist for move operation.")
+                return False
+
+            # Ensure destination directory exists if destination_path is a full file path (not just a dir)
+            # shutil.move can often handle creating the final directory component if it's part of a rename,
+            # but not intermediate directories. Let's be explicit for the parent of the target.
+            dest_parent_dir = os.path.dirname(destination_path)
+            if dest_parent_dir and not os.path.exists(dest_parent_dir):
+                 os.makedirs(dest_parent_dir)
+                 print(f"Created destination directory for move: {dest_parent_dir}")
+
+            shutil.move(source_path, destination_path)
+
+            print(f"Successfully moved '{source_path}' to '{destination_path}'.")
+            return True
+        except Exception as e:
+            print(f"Error moving '{source_path}' to '{destination_path}': {e}")
+            return False
+
+    def delete_item(self, item_path: str, require_confirmation: bool = True) -> tuple[bool, bool]:
+        """
+        Deletes a file or directory.
+
+        :param item_path: Path to the file or directory to delete.
+        :param require_confirmation: If True, the method will not delete but indicate
+                                     that confirmation is needed. If False, it deletes directly.
+                                     This parameter is for the module's internal logic;
+                                     actual user confirmation should be handled by the caller.
+        :return: A tuple (success: bool, confirmation_was_required_and_pending: bool).
+                 - If require_confirmation is True and item exists: (False, True) -> needs confirmation.
+                 - If require_confirmation is False and deletion succeeds: (True, False).
+                 - If deletion fails for other reasons: (False, False).
+                 - If item does not exist: (False, False) with an error message.
+        """
+        print(f"Attempting to delete '{item_path}' (require_confirmation={require_confirmation})")
+        import shutil
+        try:
+            if not os.path.exists(item_path):
+                print(f"Error: Path '{item_path}' does not exist. Nothing to delete.")
+                return False, False
+
+            if require_confirmation:
+                print(f"Confirmation required to delete '{item_path}'. Deletion not performed by this call.")
+                return False, True # Indicates confirmation is pending
+
+            # Proceed with deletion if confirmation is not required by this call
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+                print(f"Successfully deleted directory: {item_path}")
+            else: # It's a file
+                os.remove(item_path)
+                print(f"Successfully deleted file: {item_path}")
+            return True, False
+
+        except Exception as e:
+            print(f"Error deleting '{item_path}': {e}")
+            return False, False
+
+    def launch_application(self, application_name_or_path: str, args: list[str] = None) -> bool:
+        """
+        Launches an application.
+
+        :param application_name_or_path: The name of the application (if in PATH)
+                                         or the full path to the executable.
+        :param args: A list of command-line arguments to pass to the application.
+        :return: True if launch was attempted successfully (doesn't guarantee app started without errors),
+                 False if the command could not be constructed or subprocess failed to start.
+        """
+        if args is None:
+            args = []
+
+        command = [application_name_or_path] + args
+
+        print(f"Attempting to launch application with command: {' '.join(command)}")
+        import subprocess
+        import sys
+
+        try:
+            # For Windows, using shell=True can sometimes help find executables in PATH
+            # and handles spaces in paths more naturally if not quoting properly.
+            # However, it's generally less secure if command parts are from untrusted input.
+            # For now, assuming application_name_or_path is trusted.
+            # Popen is non-blocking.
+            if sys.platform == "win32":
+                # On Windows, subprocess.Popen with shell=False might have trouble if app_name_or_path has spaces
+                # and is not an .exe directly, but rather something that needs cmd's help to resolve.
+                # For simple .exe calls or full paths, shell=False is fine.
+                # Using shell=True for broader compatibility on Windows for finding apps like 'notepad'.
+                # If using shell=True, command should be a string.
+                subprocess.Popen(" ".join(command), shell=True)
+            else: # For Linux/macOS
+                subprocess.Popen(command) # shell=False is default and generally safer
+
+            print(f"Successfully launched command for '{application_name_or_path}'. The application should open independently.")
+            return True
+        except FileNotFoundError:
+            print(f"Error: Application not found at '{application_name_or_path}'. Check if it's in PATH or provide full path.")
+            return False
+        except Exception as e:
+            print(f"Error launching application '{application_name_or_path}': {e}")
+            return False
+
+    def create_note_in_notepad(self, title: str, content: str, filename_prefix: str = "agent_note") -> bool:
+        """
+        Creates a temporary text file with the given content and attempts to open it with Notepad.
+        This is primarily designed for Windows where 'notepad.exe' is standard.
+
+        :param title: A title used to generate part of the temporary filename (sanitized).
+        :param content: The text content to write to the temporary file.
+        :param filename_prefix: A prefix for the temporary filename.
+        :return: True if the file was created and notepad launch was attempted, False otherwise.
+        """
+        import tempfile
+        import re
+        import sys
+
+        # Sanitize title to be part of a filename
+        sane_title = re.sub(r'[^\w\-_]', '_', title if title else "untitled")
+        temp_filename = f"{filename_prefix}_{sane_title}.txt"
+
+        try:
+            with tempfile.NamedTemporaryFile(mode='w+', prefix=f"{filename_prefix}_", suffix=f"_{sane_title}.txt", delete=False, encoding='utf-8') as tmp_file:
+                tmp_file.write(f"Title: {title}\n\n")
+                tmp_file.write(content)
+                temp_filepath = tmp_file.name
+
+            print(f"Temporary note content saved to: {temp_filepath}")
+
+            if sys.platform == "win32":
+                print(f"Attempting to open '{temp_filepath}' with notepad.exe...")
+                # On Windows, notepad.exe should be in PATH.
+                # We pass the filepath as an argument to notepad.
+                launched = self.launch_application("notepad.exe", [temp_filepath])
+                if launched:
+                    print(f"Notepad launch attempted. Note should appear in Notepad.")
+                    # Note: The temporary file is NOT deleted here. Notepad will have it open.
+                    # A more robust solution might manage cleanup later, or save to a non-temp location.
+                    # For now, it persists until manually deleted or temp dir cleanup by OS.
+                    return True
+                else:
+                    print(f"Failed to launch Notepad for '{temp_filepath}'.")
+                    # Clean up the temp file if notepad couldn't even be launched
+                    try: os.remove(temp_filepath) catch: pass
+                    return False
+            else:
+                print(f"Notepad integration is Windows-specific. On {sys.platform}, file saved at '{temp_filepath}' but not opened with Notepad.")
+                # On non-Windows, we could try 'xdg-open' or another platform-specific default opener.
+                # For now, just indicate it's saved.
+                # launched = self.launch_application("xdg-open", [temp_filepath]) # Example for Linux
+                return True # Consider it "successful" in terms of file creation for non-Windows test
+
+        except Exception as e:
+            print(f"Error creating note for Notepad: {e}")
+            return False
+
+    def create_word_document(self, filepath: str, content: str, title: str = None) -> bool:
+        """
+        Creates a new Word (.docx) document with the given title and content.
+        Uses the python-docx library.
+
+        :param filepath: The full path where the .docx file should be saved.
+        :param content: The main text content for the document.
+        :param title: Optional title to be added as a Heading 1 at the beginning.
+        :return: True if document creation was successful, False otherwise.
+        """
+        print(f"Attempting to create Word document: {filepath}")
+        try:
+            from docx import Document # python-docx library
+            from docx.shared import Inches
+
+            document = Document()
+
+            if title:
+                document.add_heading(title, level=1)
+
+            document.add_paragraph(content)
+
+            # Ensure the directory for the output file exists
+            output_dir = os.path.dirname(filepath)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                print(f"Created directory for Word document: {output_dir}")
+
+            document.save(filepath)
+            print(f"Successfully created Word document: {filepath}")
+            return True
+        except ImportError:
+            print("Error: python-docx library not found. Please install it using 'pip install python-docx'.")
+            return False
+        except Exception as e:
+            print(f"Error creating Word document '{filepath}': {e}")
+            return False
+
 # Example Usage (for testing this module directly)
 if __name__ == "__main__":
     os_interaction = OSInteractionModule()
@@ -237,6 +491,224 @@ if __name__ == "__main__":
     )
     if success4 and nested_notes_path.exists():
         print(f"Content of '{nested_notes_path}':\n{nested_notes_path.read_text()}\n")
+
+    print("\n--- Testing copy_item ---")
+    # Setup for copy tests
+    copy_source_dir = test_dir / "copy_source"
+    copy_source_dir.mkdir(exist_ok=True)
+    (copy_source_dir / "file_to_copy.txt").write_text("Content of file to copy.")
+    nested_source_dir = copy_source_dir / "nested_folder"
+    nested_source_dir.mkdir(exist_ok=True)
+    (nested_source_dir / "nested_file.txt").write_text("Content of nested file.")
+
+    copy_dest_dir = test_dir / "copy_destination"
+    # copy_dest_dir.mkdir(exist_ok=True) # Let copy_item create it or handle existing
+
+    # Test 1: Copy file to new filename
+    print("\nCopying file to new filename:")
+    os_interaction.copy_item(
+        str(copy_source_dir / "file_to_copy.txt"),
+        str(copy_dest_dir / "file_copied.txt")
+    )
+    if (copy_dest_dir / "file_copied.txt").exists():
+        print(f"Verified: '{(copy_dest_dir / "file_copied.txt")}' exists.")
+
+    # Test 2: Copy file into existing directory (dest_dir itself)
+    copy_dest_dir.mkdir(exist_ok=True) # Ensure dest dir exists for this test
+    print("\nCopying file into existing directory:")
+    os_interaction.copy_item(
+        str(copy_source_dir / "file_to_copy.txt"),
+        str(copy_dest_dir) # Just the directory path
+    )
+    if (copy_dest_dir / "file_to_copy.txt").exists():
+         print(f"Verified: '{(copy_dest_dir / "file_to_copy.txt")}' exists inside destination.")
+
+    # Test 3: Copy directory to a new directory location
+    print("\nCopying directory to new directory location:")
+    os_interaction.copy_item(
+        str(copy_source_dir), # Source directory
+        str(test_dir / "copy_dest_dir_new_name")
+    )
+    if (test_dir / "copy_dest_dir_new_name" / "file_to_copy.txt").exists():
+        print(f"Verified: Copied directory '{(test_dir / "copy_dest_dir_new_name")}' contains expected file.")
+
+    # Test 4: Copy directory into an existing directory
+    existing_target_folder = test_dir / "existing_target_for_dir_copy"
+    existing_target_folder.mkdir(exist_ok=True)
+    print("\nCopying directory into an existing target directory:")
+    os_interaction.copy_item(
+        str(copy_source_dir),
+        str(existing_target_folder) # Copy source_dir *into* existing_target_folder
+    )
+    if (existing_target_folder / os.path.basename(copy_source_dir) / "file_to_copy.txt").exists():
+        print(f"Verified: Copied directory created inside '{(existing_target_folder)}' and contains expected file.")
+
+    # Test 5: Copy non-existent source
+    print("\nCopying non-existent source:")
+    os_interaction.copy_item("path/to/non_existent_source.txt", str(copy_dest_dir))
+
+    print("\n--- Testing move_item ---")
+    # Setup for move tests - ensure fresh source items
+    move_source_base = test_dir / "move_source_base"
+    move_source_base.mkdir(exist_ok=True)
+
+    file_to_move = move_source_base / "file_to_move.txt"
+    file_to_move.write_text("Content of file to move.")
+
+    dir_to_move = move_source_base / "folder_to_move"
+    dir_to_move.mkdir(exist_ok=True)
+    (dir_to_move / "sub_file.txt").write_text("Sub file in folder to move.")
+
+    move_dest_base = test_dir / "move_destination_base"
+    move_dest_base.mkdir(exist_ok=True)
+
+    # Test 1: Move file to new filename (rename)
+    print("\nMoving file to new filename (rename):")
+    target_file_path_rename = str(move_dest_base / "file_moved_renamed.txt")
+    os_interaction.move_item(str(file_to_move), target_file_path_rename)
+    if not file_to_move.exists() and Path(target_file_path_rename).exists():
+        print(f"Verified: Source '{file_to_move}' gone, Dest '{target_file_path_rename}' exists.")
+    else:
+        print(f"Verification FAILED for move file rename. Source exists: {file_to_move.exists()}, Dest exists: {Path(target_file_path_rename).exists()}")
+
+
+    # Test 2: Move file into existing directory
+    # Recreate source file for this test
+    file_to_move_again = move_source_base / "file_to_move_again.txt"
+    file_to_move_again.write_text("Content of file to move again.")
+    target_dir_for_file = move_dest_base / "target_folder_for_file"
+    target_dir_for_file.mkdir(exist_ok=True)
+    print("\nMoving file into existing directory:")
+    os_interaction.move_item(str(file_to_move_again), str(target_dir_for_file))
+    moved_file_in_target_dir = target_dir_for_file / file_to_move_again.name
+    if not file_to_move_again.exists() and moved_file_in_target_dir.exists():
+        print(f"Verified: Source '{file_to_move_again}' gone, Dest '{moved_file_in_target_dir}' exists.")
+    else:
+        print(f"Verification FAILED for move file into dir. Source exists: {file_to_move_again.exists()}, Dest exists: {moved_file_in_target_dir.exists()}")
+
+
+    # Test 3: Move directory to a new directory location (rename directory)
+    print("\nMoving directory to new directory location (rename):")
+    target_dir_path_rename = str(move_dest_base / "folder_moved_renamed")
+    os_interaction.move_item(str(dir_to_move), target_dir_path_rename)
+    if not dir_to_move.exists() and Path(target_dir_path_rename).is_dir() and (Path(target_dir_path_rename) / "sub_file.txt").exists():
+        print(f"Verified: Source dir '{dir_to_move}' gone, Dest dir '{target_dir_path_rename}' exists with content.")
+    else:
+        print(f"Verification FAILED for move dir rename. Source exists: {dir_to_move.exists()}, Dest exists: {Path(target_dir_path_rename).exists()}")
+
+    # Test 4: Move directory into an existing directory
+    # Recreate source directory for this test
+    dir_to_move_again = move_source_base / "folder_to_move_again"
+    dir_to_move_again.mkdir(exist_ok=True)
+    (dir_to_move_again / "sub_file_again.txt").write_text("Sub file in folder to move again.")
+    existing_target_folder_for_dir = move_dest_base / "existing_target_for_dir_move"
+    existing_target_folder_for_dir.mkdir(exist_ok=True)
+    print("\nMoving directory into an existing target directory:")
+    os_interaction.move_item(str(dir_to_move_again), str(existing_target_folder_for_dir))
+    moved_dir_in_target_dir = existing_target_folder_for_dir / dir_to_move_again.name
+    if not dir_to_move_again.exists() and moved_dir_in_target_dir.is_dir() and (moved_dir_in_target_dir / "sub_file_again.txt").exists():
+        print(f"Verified: Source dir '{dir_to_move_again}' gone, Dest dir '{moved_dir_in_target_dir}' exists with content.")
+    else:
+        print(f"Verification FAILED for move dir into dir. Source exists: {dir_to_move_again.exists()}, Dest exists: {moved_dir_in_target_dir.exists()}")
+
+    # Test 5: Move non-existent source
+    print("\nMoving non-existent source:")
+    os_interaction.move_item("path/to/non_existent_source_for_move.txt", str(move_dest_base))
+
+    print("\n--- Testing delete_item ---")
+    # Setup for delete tests
+    delete_base = test_dir / "delete_base"
+    delete_base.mkdir(exist_ok=True)
+
+    # Test 1: Delete file - require confirmation
+    file_to_delete_confirm = delete_base / "file_for_confirm_delete.txt"
+    file_to_delete_confirm.write_text("Content for confirm delete.")
+    print(f"\nAttempting delete with confirmation required for: {file_to_delete_confirm}")
+    success, needs_confirm = os_interaction.delete_item(str(file_to_delete_confirm), require_confirmation=True)
+    print(f"Result: success={success}, needs_confirm={needs_confirm}")
+    if file_to_delete_confirm.exists() and needs_confirm:
+        print(f"Verified: File '{file_to_delete_confirm}' still exists, confirmation was needed.")
+    else:
+        print(f"Verification FAILED for delete with confirm. File exists: {file_to_delete_confirm.exists()}, Needs Confirm: {needs_confirm}")
+
+    # Test 2: Delete file - no confirmation (actually delete)
+    print(f"\nAttempting delete without confirmation (actual delete) for: {file_to_delete_confirm}")
+    success, needs_confirm = os_interaction.delete_item(str(file_to_delete_confirm), require_confirmation=False)
+    print(f"Result: success={success}, needs_confirm={needs_confirm}")
+    if not file_to_delete_confirm.exists() and success:
+        print(f"Verified: File '{file_to_delete_confirm}' deleted.")
+    else:
+        print(f"Verification FAILED for actual delete. File exists: {file_to_delete_confirm.exists()}, Success: {success}")
+
+    # Test 3: Delete directory - require confirmation
+    dir_to_delete_confirm = delete_base / "dir_for_confirm_delete"
+    dir_to_delete_confirm.mkdir()
+    (dir_to_delete_confirm / "dummy.txt").write_text("dummy")
+    print(f"\nAttempting delete with confirmation required for directory: {dir_to_delete_confirm}")
+    success, needs_confirm = os_interaction.delete_item(str(dir_to_delete_confirm), require_confirmation=True)
+    print(f"Result: success={success}, needs_confirm={needs_confirm}")
+    if dir_to_delete_confirm.exists() and needs_confirm:
+        print(f"Verified: Directory '{dir_to_delete_confirm}' still exists, confirmation was needed.")
+
+    # Test 4: Delete directory - no confirmation (actually delete)
+    print(f"\nAttempting delete without confirmation (actual delete) for directory: {dir_to_delete_confirm}")
+    success, needs_confirm = os_interaction.delete_item(str(dir_to_delete_confirm), require_confirmation=False)
+    print(f"Result: success={success}, needs_confirm={needs_confirm}")
+    if not dir_to_delete_confirm.exists() and success:
+        print(f"Verified: Directory '{dir_to_delete_confirm}' deleted.")
+
+    # Test 5: Delete non-existent item
+    print("\nAttempting to delete non-existent item:")
+    success, needs_confirm = os_interaction.delete_item("path/to/non_existent_for_delete.txt")
+    print(f"Result: success={success}, needs_confirm={needs_confirm}")
+
+    print("\n--- Testing launch_application ---")
+    # Note: Actual launching of GUI apps like notepad won't be visible in headless test env.
+    # We are testing if the command to launch is successfully issued.
+    # On Windows, 'notepad' or 'calc' are common. On Linux, 'ls' or 'echo'.
+    import sys
+    if sys.platform == "win32":
+        print("\nAttempting to launch 'notepad.exe' (Windows specific test):")
+        os_interaction.launch_application("notepad.exe")
+        # Test with args (will likely open notepad and then notepad will complain about the arg)
+        # os_interaction.launch_application("notepad.exe", ["test_file_for_notepad.txt"])
+    else: # Linux/macOS
+        print("\nAttempting to launch 'ls -l' (Linux/macOS specific test, output won't be captured here):")
+        # Popen is non-blocking, so we won't see output directly unless we manage stdout/stderr
+        os_interaction.launch_application("ls", ["-l", "/app"]) # List files in current dir
+        # This test is mainly to see if Popen gets called without error.
+
+    print("\nAttempting to launch a non-existent application:")
+    os_interaction.launch_application("app_that_does_not_exist_anywhere")
+
+    # To test launching a file with its default application on Windows, one might use:
+    # os.startfile("some_document.txt") # This is Windows specific.
+    # Our launch_application is more for executables.
+
+    print("\n--- Testing create_note_in_notepad ---")
+    print("\nAttempting to create a note for Notepad (behavior is OS-dependent):")
+    notepad_success = os_interaction.create_note_in_notepad(
+        title="My Test Note for Notepad",
+        content="This is the content of the note.\nIt has multiple lines."
+    )
+    print(f"Result of create_note_in_notepad: {notepad_success}")
+    # Note: If successful on Windows, a temp file was created and notepad.exe was launched with it.
+    # That temp file is not automatically cleaned up by this test to allow Notepad to use it.
+    # On Linux, a temp file is created, and a message about Windows-specificity is printed.
+
+    print("\n--- Testing create_word_document ---")
+    word_doc_path = test_dir / "MyAgentCreatedWordDoc.docx"
+    print(f"\nAttempting to create a Word document at: {word_doc_path}")
+    word_success = os_interaction.create_word_document(
+        filepath=str(word_doc_path),
+        title="Agent Report - Word",
+        content="This document was generated by the Python agent using python-docx."
+    )
+    print(f"Result of create_word_document: {word_success}")
+    if word_success and word_doc_path.exists():
+        print(f"Verified: Word document '{word_doc_path}' created.")
+    else:
+        print(f"Verification FAILED for Word document creation. Exists: {word_doc_path.exists()}")
 
 
     # Clean up dummy files and directories
